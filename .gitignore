@@ -1,3 +1,5 @@
+.gitignore
+
 # ignore the virtual env
 .venv/
 env37/
