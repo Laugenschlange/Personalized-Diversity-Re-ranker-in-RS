@@ -1,0 +1,23 @@
+# ignore the virtual env
+.venv/
+env37/
+working_code/myenv/
+
+# ignore the working folder
+Mine/
+
+# ignore the datasets
+data/
+behavior_log.csv
+behavior_log.csv.tar.gz
+preprocess_ml.py
+
+
+
+# ignore irrelevant folder
+MIR/
+RAPID/
+RAPID_preprocess_ml/
+
+
+
