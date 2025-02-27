@@ -10,7 +10,6 @@ Mine/
 data/
 behavior_log.csv
 behavior_log.csv.tar.gz
-preprocess_ml.py
 
 
 
