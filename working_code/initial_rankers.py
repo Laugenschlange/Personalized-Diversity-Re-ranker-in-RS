@@ -4,7 +4,7 @@ import pickle as pkl
 import numpy as np
 from sklearn.tree import DecisionTreeRegressor
 from multiprocessing import Pool
-import lightgbm as lgb
+#import lightgbm as lgb
 
 
 
@@ -71,7 +71,8 @@ class BaseModel(object):
             self.target_user = tf.reshape(self.target_user, [-1, user_fnum * eb_dim])
 
     def build_fc_net(self, inp):
-        bn1 = tf.layers.batch_normalization(inputs=inp, name='bn1')
+        bn1 = tf.keras.layers.BatchNormalization(name='bn1')(inp)
+        #bn1 = tf.layers.batch_normalization(inputs=inp, name='bn1')
         #fc1 = tf.keras.layers.Dense(bn1, 200, activation=tf.nn.relu, name='fc1')
         fc1 = tf.keras.layers.Dense(200, activation=tf.nn.relu, name='fc1')(bn1)
         dp1 = tf.nn.dropout(fc1, self.keep_prob, name='dp1')
@@ -86,7 +87,8 @@ class BaseModel(object):
         self.y_pred = tf.reshape(score[:, 0], [-1, ])
 
     def build_mlp_net(self, inp):
-        bn1 = tf.layers.batch_normalization(inputs=inp, name='bn1')
+        bn1 = tf.keras.layers.BatchNormalization(name='bn1')(inp)
+        #bn1 = tf.layers.batch_normalization(inputs=inp, name='bn1')
         #fc1 = tf.keras.layers.Dense(bn1, 500, activation=tf.nn.relu, name='fc1')
         fc1 = tf.keras.layers.Dense(500, activation=tf.nn.relu, name='fc1')(bn1)
         dp1 = tf.nn.dropout(fc1, self.keep_prob, name='dp1')
@@ -141,6 +143,7 @@ class BaseModel(object):
         return loss
 
     def eval(self, sess, batch_data, reg_lambda):
+        # batch_data: [uid, iid, user_behavior, label, seq_len]
         pred, label, loss = sess.run([self.y_pred, self.label_ph, self.loss], feed_dict={
             self.user_behavior_ph: batch_data[2],
             self.user_behavior_length_ph: batch_data[4],

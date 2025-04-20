@@ -24,7 +24,7 @@ class BaseModel(object):
         # input placeholders
         with tf.name_scope('inputs'):
             if multi_hot: # i.e. if MovieLens-20M, there're 20 genres (cates) instead of 5 topics (cates), num_cat==len(cid_dict)
-                self.feat_ph = tf.placeholder(tf.int32, [None, max_time_len, item_fnum + num_cat - 1], name='seq_feat_ph') # [None, 20, 2+20-1] -> for retrieving values from embeddings by indices
+                self.feat_ph = tf.placeholder(tf.int32, [None, max_time_len, item_fnum + num_cat - 1], name='seq_feat_ph') # [None, 20, 2+20-1]
             else:
                 self.feat_ph = tf.placeholder(tf.int32, [None, max_time_len, item_fnum], name='seq_feat_ph') # not num_cat relevant [None, 20, 2]
             self.user_behavior_ph = tf.placeholder(tf.int32, [None, max_seq_len * num_cat], name='user_behavior_ph') # [None, max_behavior_len*5] or [None, max_b_l*20] for ml-20m
@@ -38,7 +38,7 @@ class BaseModel(object):
             self.keep_prob = tf.placeholder(tf.float32, [])
             self.max_time_len = max_time_len
             self.hidden_size = hidden_size
-            self.emb_dim = eb_dim # 16
+            self.emb_dim = eb_dim
             self.item_fnum = item_fnum
             self.num_cat = num_cat
             self.mu = mu # the rel&div tradeoff param lambda, set in DCM, here it should only be a indicator that under which scenario the model RAPID has been trained
@@ -53,7 +53,7 @@ class BaseModel(object):
                                                     initializer=tf.truncated_normal_initializer)
 
                 item_multi_hot = tf.cast(tf.reshape(self.feat_ph, [-1, item_fnum + num_cat - 1])[:, 1:], tf.float32) # tf.reshape([None, 20, 21], [-1, 21])[:,1:]
-                self.item_embed = tf.reshape(tf.nn.embedding_lookup(self.emb_mtx, self.feat_ph[:, :, 0]), [-1, eb_dim]) # retrieve self.emb_mtx by shape (20, 21)
+                self.item_embed = tf.reshape(tf.nn.embedding_lookup(self.emb_mtx, self.feat_ph[:, :, 0]), [-1, eb_dim])
                 self.cate_embed = tf.reshape(tf.matmul(item_multi_hot, self.cate_emb_mtx), [-1, eb_dim])
                 self.cate_embed = self.cate_embed / (tf.reduce_sum(item_multi_hot, axis=-1, keepdims=True) + 1e-9)
                 self.item_seq = tf.concat([self.item_embed, self.cate_embed], -1)
@@ -174,12 +174,12 @@ class BaseModel(object):
             # change inp to [batch_size, time_step, feature_dim]
             # stack again the unstacked tensor
             time_step = len(inp)
-            # inp is a list of tensors with shape [?, 52] -> item_seq (each item is represented by a concatenation of user feature, item feature and the topic coverage feature)
+            # inp is a list of tensors with shape [?, 52]
             new_inp = tf.stack(inp, axis=1) # [batch_size, time_step, fea_dim]
             outputs, fw_h, fw_c, bw_h, bw_c = bidirectional_lstm(new_inp) # input tensor with shape [batch_size, time_steps, feature_dim]
 
             # final states for fw and bw cells
-            state_fw = (fw_h, fw_c) # hidden state (represents the final short-term memory, cell state represents the final long-term memory
+            state_fw = (fw_h, fw_c)
             state_bw = (bw_h, bw_c)
             '''
             lstm_fw_cell = tf.nn.rnn_cell.BasicLSTMCell(hidden_size, forget_bias=1.0, name='cell_fw') # forward ⭐️
@@ -274,7 +274,7 @@ class RAPID(BaseModel):
 
             # relevance estimator (bilstm)
             with tf.variable_scope('rel'):                
-                rel_outputs, _, _ = self.bilstm(item_seq, hidden_size, scope='rel_bilstm') # change dim of item_seq, evaluates the item_seq's (item_embed + cate_embed) rel 
+                rel_outputs, _, _ = self.bilstm(item_seq, hidden_size, scope='rel_bilstm') # change dim of item_seq, evaluates the item_seq's (item_embed + cate_embed) rel
                 # then no need to stack rel_outputs again
                 # rel_outputs = tf.stack(rel_outputs, axis=1)
                 seq_rel = tf.reshape(rel_outputs, (-1, max_time_len, hidden_size * 2)) # [-1, 20, hidden_size * 2]
@@ -297,7 +297,7 @@ class RAPID(BaseModel):
             if pure_rnn:
                 seq_rel_inp = seq_rel
             else:
-                seq_rel_inp = tf.concat([seq_rel, self.div_gain], axis=2) # rel + div -> [-1, max_time_len, hidden_size * 2 * 2]
+                seq_rel_inp = tf.concat([seq_rel, self.div_gain], axis=2) # rel + div
             
 
             # self.build_attraction()
@@ -313,7 +313,7 @@ class RAPID(BaseModel):
             ids.extend(ids_all)
         return ids
 
-    def build_relevance_net(self, inp): # MLP to concatenate rel + div scores
+    def build_relevance_net(self, inp):
         #bn1 = tf.layers.batch_normalization(inputs=inp, name='bn1') #⭐️
         bn1 = tf.keras.layers.BatchNormalization(name='bn1')(inp) #⭐️
         #fc1 = tf.layers.dense(bn1, 200, activation=tf.nn.relu, name='fc1') #⭐️
@@ -328,8 +328,8 @@ class RAPID(BaseModel):
         mean = tf.keras.layers.Dense(2, activation=None, name='fc3')(dp2) #⭐️
         var_dp2 = tf.nn.dropout(fc2, self.keep_prob, name='var_dp2')
         #var_fc3 = tf.layers.dense(var_dp2, 2, activation=None, name='var_fc3') #⭐️
-        var_fc3 = tf.keras.layers.Dense(2, activation=None, name='var_fc3')(var_dp2) #⭐️ std
-        var = tf.abs(tf.random_normal(tf.shape(var_fc3), 0, 1, tf.float32)) * var_fc3 # standard normal random variable * std
+        var_fc3 = tf.keras.layers.Dense(2, activation=None, name='var_fc3')(var_dp2) #⭐️
+        var = tf.abs(tf.random_normal(tf.shape(var_fc3), 0, 1, tf.float32)) * var_fc3
         if self.map:
             score = tf.nn.softmax(mean)
         else: # map is set to False
@@ -380,10 +380,9 @@ class RAPID(BaseModel):
         gives the output pred,term,label,loss in eval() in run_test.py using model.eval() (RAPID)
         the first and second output var. are the same (what's the meaning?)
         '''
-        #rel_div, rel, div, pred, label, loss = sess.run([self.relevance, self.lstm_rel, self.div_gain, self.attraction, self.label_ph, self.loss], feed_dict={ #⭐️
-        pred, label, loss = sess.run([self.attraction, self.label_ph, self.loss], feed_dict={ #⭐️
-            self.feat_ph: batch_data[0], # (20, 21) [feature_id, features...] -> the seq of items in initial ranking list
-            self.label_ph: batch_data[1], # from original batch_data, comes from DCM's simulated click
+        rel_div, rel, div, pred, label, loss = sess.run([self.relevance, self.lstm_rel, self.div_gain, self.attraction, self.label_ph, self.loss], feed_dict={ #⭐️
+            self.feat_ph: batch_data[0],
+            self.label_ph: batch_data[1], # from original batch_data
             self.seq_length_ph: batch_data[2],
             self.user_behavior_ph: batch_data[3],
             self.behavior_len_ph: batch_data[-1],

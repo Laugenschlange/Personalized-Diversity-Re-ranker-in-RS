@@ -38,10 +38,10 @@ def padding_list(seq, max_len):
     return seq[:max_len], seq_length
 
 
-def construct_behavior_data(data, user_history, max_len, multi_hot=False):
+def construct_behavior_data(data, user_history, max_len, multi_hot=False): # here user_history is only the 0.2 part of the whole data.data, no intersection with train/val/test set
     target_user, target_item, user_behavior, label, seq_length = [], [], [], [], []
-    for d in data:
-        uid, iid, cid, lb, = d
+    for d in data: # from train/test_file
+        uid, iid, cid, lb, = d # lb=relevance, 1 if rating>4
         if uid in user_history:
             target_user.append(uid)
             if multi_hot:
@@ -57,17 +57,17 @@ def construct_behavior_data(data, user_history, max_len, multi_hot=False):
     return target_user, target_item, user_behavior, label, seq_length
 
 
-def get_user_div_history(user_history, max_behavior_len, items_div, multi_hot=False):
+def get_user_div_history(user_history, max_behavior_len, items_div, multi_hot=False): # already specified uid in input, user_history is now the list of user's liked items and its cate_multi -> only positive
     '''
     generate separate user history for learning theta in diver
     items belong to the category that has the largest prob
     '''
-    num_cat = len(items_div[user_history[0][0]])
+    num_cat = len(items_div[user_history[0][0]]) # user_history[0][0] is the iid
     div_dict = {cid: [] for cid in range(num_cat)}
     user_div = []
-    for iid in user_history:
+    for iid in user_history: # it's actually uid
         if iid[0] == 0:
-            continue
+            continue # this user has no behavior history? (at least after filtering)
         if multi_hot:
             for i, v in enumerate(iid[1:]):
                 if v:
@@ -90,19 +90,19 @@ def dcm_theta(user_profile_dict, item_div_dir, num_clusters, user_set, out_file,
     count_cat = {uid: np.zeros(num_clusters) for uid in user_set} # first create a shell for user embeddings based on num_clusters and user_set
     theta = {}
     items_div = pkl.load(open(item_div_dir, 'rb'))
-    for uid, user_list in user_profile_dict.items():
-        for itm in user_list: # evaluate users based on clusters (multi) hot embeddings, if cluster A has been interacted with -> 1
+    for uid, user_list in user_profile_dict.items(): # {uid: [iid, cate_multi_hot], [iid, cate_multi_hot]...}
+        for itm in user_list: # [iid, cate_multi_hot]
             iid = itm[0]
-            if iid == 0: # ⚡️??? why when the first cluster's hot coding==0, then skip all the rest?
+            if iid == 0: # iid is now the list of [iid, cate_multi]
                 continue
             if multi_hot:
-                count_cat[uid] += np.array(itm[1:])
+                count_cat[uid] += np.array(itm[1:]) # concatenate the cate_multi for of each record for each user -> to count the num of cate (repetable)
             else:
                 itm_div_class = np.argmax(np.array(items_div[iid])) # pick out the cluster that has the most div_value for this iid?
                 count_cat[uid][itm_div_class] += 1 # now has created an embedding that with uid as keys, with the num of each cluster has popped up in items_div as value for its new value
     for uid, cats in count_cat.items():
         if multi_hot:
-            theta[uid] = normalize(cats)
+            theta[uid] = normalize(cats) # the theta (diversity degree) of one user is acquired by normalizing her num of cates
         else:
             theta[uid] = normalize(cats)
     with open(out_file, 'wb') as f:
@@ -112,21 +112,21 @@ def dcm_theta(user_profile_dict, item_div_dir, num_clusters, user_set, out_file,
 
 def rank(users, items, preds, labels, out_file, item_div_dir, user_history, max_behavior_len, multi_hot=False):
     '''
-    for ranking-stage, creating initial list for DIN/SVM/MART
+    for ranking-stage, creating initial list for RAPID (DIN.rankings.training/test)
     '''
-    items_div = pkl.load(open(item_div_dir, 'rb'))
+    items_div = pkl.load(open(item_div_dir, 'rb')) # diversity.item [iid, cate_multi_hot]
     rankings = defaultdict(list)
     with open(out_file, 'w') as fout:
-        for uid, iid, pred, lb in zip(users, items, preds, labels):
-            rankings[uid].append((iid, pred, lb))
+        for uid, iid, pred, lb in zip(users, items, preds, labels): # lb=label
+            rankings[uid].append((iid, pred, lb)) # create initial ranking list for each uid
         for uid, user_list in rankings.items():
-            if len(user_list) >= 3:
+            if len(user_list) >= 3: # limit the seq of each user up to 3
                 user_list = sorted(user_list, key=lambda x: x[1], reverse=True) # sort by predictions. moved this to load_data()
-                for itm in user_list:
-                    hist_u = list(map(str, get_user_div_history(user_history[uid], max_behavior_len, items_div, multi_hot)))
-                    ft, p, l = itm
+                for itm in user_list: # [iid, pred, lable]
+                    hist_u = list(map(str, get_user_div_history(user_history[uid], max_behavior_len, items_div, multi_hot))) # user_history is user_profile_dict {uid: [iid, cate_multi]...}
+                    ft, p, l = itm # feature is item feature [iid, multi_cate]
                     if multi_hot:
-                        i, c = ft[0], list(map(int, ft[1:]))
+                        i, c = ft[0], list(map(int, ft[1:])) # [iid, cate_multi]
                         div_i = list(map(str, items_div[i]))
                         fout.write(','.join([str(l), str(p), str(uid), str(i)] + list(map(str, c)) + div_i + hist_u))
                     else:
@@ -148,12 +148,17 @@ def get_last_click_pos(my_list):
 
 
 def construct_list(data_dir, max_time_len, num_cat, is_train, multi_hot=False):
+    '''
+    constuct training and test files
+    is_train: (bool) decides train(True)/test(False)
+    multi_hot: (bool) 'True' for ml-20m and citeulike | 'False' for ad
+    '''
     if multi_hot:
-        num_sample = 20 if is_train else 4
+        num_sample = 20 if is_train else 4 # need to change for citeulike
     else:
         num_sample = 50 if is_train else 10
     feat, click, seq_len, user_behavior, items_div, uid, pred = [], [], [], [], [], [], []
-    with open(data_dir, 'r') as f:
+    with open(data_dir, 'r') as f: # read DIN.rankings.train/test.{max_behavior_len}
         for line in f:
             items = line.strip().split('\t')
 
@@ -164,7 +169,7 @@ def construct_list(data_dir, max_time_len, num_cat, is_train, multi_hot=False):
                 pred_i.append(float(itm[1]))
                 uid_i.append(int(itm[2]))
                 if multi_hot:
-                    feat_i.append(list(map(int, list(map(float, itm[3:4 + num_cat])))))
+                    feat_i.append(list(map(int, list(map(float, itm[3:4 + num_cat]))))) # []
                     div_i.append(normalize(list(map(float, itm[4 + num_cat:4 + 2*num_cat]))).tolist())
                     user_i.append(list(map(int, itm[4 + 2*num_cat:])))
                 else:
@@ -172,9 +177,9 @@ def construct_list(data_dir, max_time_len, num_cat, is_train, multi_hot=False):
                     div_i.append(list(map(float, itm[5:5 + num_cat])))
                     user_i.append(list(map(int, itm[5 + num_cat:])))
             rankings = list(zip(click_i, pred_i, feat_i, div_i, user_i))
-            if len(rankings) > max_time_len:
-                for i in range(num_sample):
-                    cand = random.sample(rankings, max_time_len)
+            if len(rankings) > max_time_len: # if the number of candidates beyond the max_time_len
+                for i in range(num_sample): # as long as it's within num_sample (multi_hot: 20 for training, 4 for testing | not multi_hot: 50 for training, 10 for testing)
+                    cand = random.sample(rankings, max_time_len) # randomly select candidates
                     click_i, pred_i, feat_i, div_i, user_i = zip(*cand)
                     seq_len_i = len(feat_i)
                     sorted_idx = sorted(range(len(pred_i)), key=lambda k: pred_i[k], reverse=True)
@@ -183,14 +188,14 @@ def construct_list(data_dir, max_time_len, num_cat, is_train, multi_hot=False):
                     feat_i = np.array(feat_i)[sorted_idx].tolist()
                     div_i = np.array(div_i)[sorted_idx].tolist()
 
-                    feat.append(feat_i[:max_time_len])
+                    feat.append(feat_i[:max_time_len]) # only extracts the first max_time_len's features i.e. 20
                     user_behavior.append(user_i[0])
                     click.append(click_i[:max_time_len])
                     items_div.append(div_i[:max_time_len])
                     seq_len.append(min(max_time_len, seq_len_i))
                     uid.append(uid_i[0])
                     pred.append(pred_i[:max_time_len])
-            else:
+            else: # fill the rest of max_time_len with [0,0,...] -> could cause the wrong item's feat_id '0'
                 click_i, pred_i, feat_i, div_i, user_i = zip(*rankings)
                 seq_len_i = len(feat_i)
                 sorted_idx = sorted(range(len(pred_i)), key=lambda k: pred_i[k], reverse=True)
@@ -198,8 +203,10 @@ def construct_list(data_dir, max_time_len, num_cat, is_train, multi_hot=False):
                 click_i = np.array(click_i)[sorted_idx].tolist()
                 feat_i = np.array(feat_i)[sorted_idx].tolist()
                 div_i = np.array(div_i)[sorted_idx].tolist()
-
-                feat.append(feat_i + [np.zeros_like(np.array(feat_i[0])).tolist()] * (max_time_len - seq_len_i))
+                
+                feat.append(feat_i + [np.zeros_like(np.array(feat_i[0])).tolist()] * (max_time_len - seq_len_i)) # [array]*(20-len(feat_i))
+                #print(feat_i)
+                #print(feat_i + [np.zeros_like(np.array(feat_i[0])).tolist()] * (max_time_len - seq_len_i))
                 user_behavior.append(user_i[0])
                 click.append(click_i + [0] * (max_time_len - seq_len_i))
                 items_div.append(div_i + [np.zeros_like(np.array(div_i[0])).tolist()] * (max_time_len - seq_len_i))
@@ -211,21 +218,24 @@ def construct_list(data_dir, max_time_len, num_cat, is_train, multi_hot=False):
 
 
 def load_data(data, click_model, num_cate, max_hist_len, test=False):
+    '''
+    load data via click_model DCM
+    '''
     feat, click, seq_len, user_behavior, items_div, uid, _ = data
     feat_cm, label_cm, seq_len_cm, user_behavior_cm, items_div_cm, uid_cm, behav_len_cm = [], [], [], [], [], [], []
     i = 0
-    for feat_i, click_i, seq_len_i, user_i, div_i, uid_i in zip(feat, click, seq_len, user_behavior, items_div, uid): # len(user_behavior) should be 100 if len(max_behavior_len)==5
+    for feat_i, click_i, seq_len_i, user_i, div_i, uid_i in zip(feat, click, seq_len, user_behavior, items_div, uid): # len(user_behavior) should be 100 if len(max_behavior_len)==5, should be 200 if max_beh_len==10
         behav_len = process_seq(user_i, num_cate, max_hist_len) # len(user_i) == len(num_cate) * len(max_hist_len)
         item_list_i = [itm[0] for itm in feat_i]
-        label_cm_i = click_model.generate_clicks(uid_i, item_list_i, len(item_list_i))
+        label_cm_i = click_model.generate_clicks(uid_i, item_list_i, len(item_list_i)) # the label data also come from click_model
         if not test:
-            if sum(label_cm_i) == len(label_cm_i) or sum(label_cm_i) == 0:
+            if sum(label_cm_i) == len(label_cm_i) or sum(label_cm_i) == 0: # either the user has clicked all the showed items so far or has clicked no one -> skip the following, no appending
                 continue
-
+        # only appends the meaningful features, if test=True, then appends all data
         feat_cm.append(feat_i)
         user_behavior_cm.append(user_i)
         behav_len_cm.append(behav_len)
-        label_cm.append(label_cm_i)
+        label_cm.append(label_cm_i) # the label now decided by DCM
         items_div_cm.append(div_i)
         seq_len_cm.append(seq_len_i)
         uid_cm.append(uid_i)
@@ -241,7 +251,7 @@ def get_hist_len(seq):
 
 def process_seq(seq, num_cate, seq_len):
     len_list = []
-    seq = np.reshape(np.array(seq), [num_cate, seq_len]) # num_cate==20, seq_len==5 if max_behavior_len==5
+    seq = np.reshape(np.array(seq), [num_cate, seq_len]) # num_cate==20, seq_len==5 if max_behavior_len==5, num_cate==20, seq_len==10 if max_behavior_len==10
     for idx in range(num_cate):
         len_list.append(get_hist_len(seq[idx]))
     return len_list
@@ -289,7 +299,7 @@ def evaluate(labels, preds, terms, users, items, click_model, items_div, scope_n
         gold = sorted(range(len(click)), key=lambda k: click[k], reverse=True) # optimal list for ndcg
         item_div_final = item_div[final]
 
-        ideal_dcg, dcg, util, rr = 0, 0, 0, 0
+        ideal_dcg, dcg, util, rr = 0, 0, 0, 0 # ndcg is acquired by using ideal_dcg
         scope_number = min(scope_number, seq_len+1) # ⭐️choose scope_number or seq_len as the final index, cuz the click_value after seq_len are all 0 -> useless anyway. But if it's about how many items shouldnt it be seq_len+1? ⭐️ changed to seq_len+1
         scope_final = final[:scope_number] 
         scope_gold = gold[:scope_number]
@@ -306,11 +316,11 @@ def evaluate(labels, preds, terms, users, items, click_model, items_div, scope_n
         rr = 1. / (np.argmax(np.array(new_click)) + 1)
 
         ndcg.append(_ndcg)
-        utility.append(sum(new_click))
+        utility.append(sum(new_click)) # the sum of click_prob of all items?
         mrr.append(rr)
         ils.append(np.sum(euclidean_distances(scope_div, scope_div)) / (scope_number * (scope_number - 1) / 2))
         diversity.append(np.sum(1 - np.prod(1 - scope_div, axis=0)))
         satisfaction.append(click_model.generate_satisfaction(uid, final_list, scope_number))
     return np.mean(np.array(ndcg)), np.mean(np.array(utility)), np.mean(np.array(ils)), np.mean(
         np.array(diversity)), np.mean(np.array(satisfaction)), np.mean(np.array(mrr)), \
-           [ndcg, utility, diversity, satisfaction, mrr]
+        [ndcg, utility, diversity, satisfaction, mrr]

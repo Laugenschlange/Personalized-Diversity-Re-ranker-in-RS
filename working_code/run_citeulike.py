@@ -20,10 +20,10 @@ from click_models import DCM
 #@tf.function
 
 
-def eval(model, sess, data_file, max_time_len, max_seq_len, reg_lambda, batch_size, num_cat, isrank):
+def eval(model, sess, data_file, max_time_len, max_seq_len, reg_lambda, batch_size, num_cat, isrank, level):
     '''
     model: RAPID, has .train (train the model) .eval (evaluate on test set) 
-    data_file: test_file, from 'data.data' [features, clicks, seq_len, user_behavior, items_div, uid, _ ]
+    data_file: test_file, from 'data_{level}.data' [features, clicks, seq_len, user_behavior, items_div, uid, _ ]
     max_time_len: 20 by default
     max_seq_len: max_behavior_len (5|10)
     isrank: (bool) i.e. is_rerank in evaluate() in utils.py, is_rerank==True: re-rank the initial list and evaluate, otherwise just evaluate the initial ranking list
@@ -72,7 +72,7 @@ def eval(model, sess, data_file, max_time_len, max_seq_len, reg_lambda, batch_si
     # in the end, users is of dim 3*256 (3 comes from batch_num, 256 comes from data_batch[-1])
     if not os.path.exists('logs_{}/{}/'.format(data_set_name, max_time_len)):
         os.makedirs('logs_{}/{}/'.format(data_set_name, max_time_len))
-    model_name = '{}_{}_{}_{}_{}_{}_{}_{}'.format(initial_rankers, model_type, max_behavior_len, hidden_size, mu, batch_size, lr, reg_lambda)
+    model_name = '{}_{}_{}_{}_{}_{}_{}_{}_{}'.format(initial_rankers, model_type, max_behavior_len, level, hidden_size, mu, batch_size, lr, reg_lambda)
 
     '''
     ################ ----------TEST Generating Reco ---------- ################
@@ -101,7 +101,7 @@ def eval(model, sess, data_file, max_time_len, max_seq_len, reg_lambda, batch_si
     return loss, res_low, res_high #users, users_evaluate
 
 def train(train_file, test_file, model_type, batch_size, feature_size, eb_dim, hidden_size, max_time_len, max_seq_len,
-          item_fnum, num_cat, mu, max_norm, multi_hot):
+          item_fnum, num_cat, mu, max_norm, multi_hot, level):
     '''
     feature_size: (int) 10244
     eb_dim: (int) 16
@@ -136,8 +136,8 @@ def train(train_file, test_file, model_type, batch_size, feature_size, eb_dim, h
     }
     if not os.path.exists('logs_{}/{}/{}'.format(data_set_name, max_time_len, mu)): # logs are more detailed with all param info
         os.makedirs('logs_{}/{}/{}'.format(data_set_name, max_time_len, mu))
-    model_name = '{}_{}_{}_{}_{}_{}_{}_{}'.format(initial_rankers, model_type, max_behavior_len, hidden_size, mu, batch_size, lr, reg_lambda) # add extra info for max_behavior_len
-    log_save_path = 'logs_{}/{}/{}/{}.metrics'.format(data_set_name, max_time_len, mu, model_name)
+    model_name = '{}_{}_{}_{}_{}_{}_{}_{}_{}'.format(initial_rankers, model_type, max_behavior_len, level, hidden_size, mu, batch_size, lr, reg_lambda) # add extra info for max_behavior_len
+    log_save_path = 'logs_{}/{}/{}/{}_{}.metrics'.format(data_set_name, max_time_len, mu, model_name, level)
 
     # gpu settings
     gpu_options = tf.GPUOptions(allow_growth=True)
@@ -152,11 +152,12 @@ def train(train_file, test_file, model_type, batch_size, feature_size, eb_dim, h
         # before training process -> only needs 1 step for processing?
         step = 0
         
-        vali_loss, res_l, res_h = eval(model, sess, test_file, max_time_len, max_seq_len, reg_lambda, batch_size, num_cat, False) #⭐️ not re-ranked yet
-   
+        vali_loss, res_l, res_h = eval(model, sess, test_file, max_time_len, max_seq_len, reg_lambda, batch_size, num_cat, False, level) #⭐️ not re-ranked yet
+    
         # for not interrupting param-iteration
-        #if vali_loss is None or res_l is None or res_h is None:
-        #    return None, None, None
+       #if vali_loss is None or res_l is None or res_h is None:
+       #     return None, None, None
+
         training_monitor['train_loss'].append(None)
         training_monitor['vali_loss'].append(None)
         training_monitor['ndcg_l'].append(res_l[0])
@@ -173,10 +174,12 @@ def train(train_file, test_file, model_type, batch_size, feature_size, eb_dim, h
         training_monitor['mrr_h'].append(res_h[5])
 
         # initial list's performance from ranking stage
-        print("STEP %d  INTIAL RANKER | LOSS VALI: NULL NDCG@5: %.4f  UTILITY@5: %.4f  ILS@5: %.4f  "
-              "DIVERSE@5: %.8f SATIS@5: %.8f MRR@5: %.8f | NDCG@10: %.4f  UTILITY@10: %.4f  ILS@10: %.4f  "
-              "DIVERSE@10: %.8f SATIS@10: %.8f MRR@10: %.8f" % (
-        step, res_l[0], res_l[1], res_l[2], res_l[3], res_l[4], res_l[5], res_h[0], res_h[1], res_h[2], res_h[3], res_h[4], res_h[5]))
+
+        #print("STEP %d  INTIAL RANKER | LOSS VALI: NULL NDCG@5: %.4f  UTILITY@5: %.4f  ILS@5: %.4f  "
+        #      "DIVERSE@5: %.8f SATIS@5: %.8f MRR@5: %.8f | NDCG@10: %.4f  UTILITY@10: %.4f  ILS@10: %.4f  "
+        #      "DIVERSE@10: %.8f SATIS@10: %.8f MRR@10: %.8f" % (
+        #step, res_l[0], res_l[1], res_l[2], res_l[3], res_l[4], res_l[5], res_h[0], res_h[1], res_h[2], res_h[3], res_h[4], res_h[5]))
+
 
         early_stop = False
         
@@ -207,8 +210,8 @@ def train(train_file, test_file, model_type, batch_size, feature_size, eb_dim, h
                     train_losses_step = []
 
                     # re-ranked list with isrank==True
-                    vali_loss, res_l, res_h = eval(model, sess, test_file, max_time_len, max_seq_len, reg_lambda, batch_size, num_cat, True) # re-ranked
-                    
+                    vali_loss, res_l, res_h = eval(model, sess, test_file, max_time_len, max_seq_len, reg_lambda, batch_size, num_cat, True, level) # re-ranked
+
                     training_monitor['train_loss'].append(train_loss)
                     training_monitor['vali_loss'].append(vali_loss)
                     training_monitor['ndcg_l'].append(res_l[0])
@@ -229,10 +232,11 @@ def train(train_file, test_file, model_type, batch_size, feature_size, eb_dim, h
                           "DIVERSE@10: %.8f SATIS@10: %.8f MRR@10: %.8f" % ( epoch,
                               step, train_loss, vali_loss, res_l[0], res_l[1], res_l[2], res_l[3], res_l[4],res_l[5],
                               res_h[0], res_h[1], res_h[2], res_h[3], res_h[4], res_h[5],))
-                    
+
+                
                     if training_monitor['utility_l'][-1] > max(training_monitor['utility_l'][:-1]): # save model based on 'utility', only keep the best over the past
                         # save model (save each optimized state as a checkpoint)
-                        model_name = '{}_{}_{}_{}_{}_{}_{}'.format(model_type, max_behavior_len, hidden_size, mu, batch_size, lr, reg_lambda)
+                        model_name = '{}_{}_{}_{}_{}_{}_{}_{}'.format(model_type, max_behavior_len, hidden_size, mu, level, batch_size, lr, reg_lambda)
                         if not os.path.exists('save_model_{}/{}/{}/'.format(data_set_name, max_time_len, model_name)):
                             os.makedirs('save_model_{}/{}/{}/'.format(data_set_name, max_time_len, model_name))
                         save_path = 'save_model_{}/{}/{}/ckpt'.format(data_set_name, max_time_len, model_name)
@@ -250,11 +254,10 @@ def train(train_file, test_file, model_type, batch_size, feature_size, eb_dim, h
                     logs_list.append([step, train_loss, vali_loss, res_l[0], res_l[1], res_l[2], res_l[3], res_l[4], res_l[5], res_h[0], res_h[1], res_h[2], res_h[3], res_h[4], res_h[5]]) # save each batch/epoch's value 
 
         # generate log
-        with open('logs_{}/{}/{}/{}.pkl'.format(data_set_name, max_time_len, mu, model_name), 'wb') as f: # for recording [train_loss, valid_loss, res_l[0-5], res_h[0-5]], under the same folder with .metrics in logs
+        with open('logs_{}/{}/{}/{}_{}.pkl'.format(data_set_name, max_time_len, mu, model_name, level), 'wb') as f: # for recording [train_loss, valid_loss, res_l[0-5], res_h[0-5]], under the same folder with .metrics in logs
             pkl.dump(training_monitor, f)
         return logs_list[-3:] # only return the last 3 records
 
-#def get_reco(model, data, 
 
 if __name__ == '__main__':
     # parameters
@@ -262,13 +265,15 @@ if __name__ == '__main__':
     data_dir = 'data/'
     # data_set_name = 'taobao'
     # data_set_name = 'ad'
-    data_set_name = 'ml-20m'
+    data_set_name = 'cite'
     #data_set_name = 'cite'
-    multi_hot = True if data_set_name == 'ml-20m' or data_set_name == 'cite' else False
-    stat_dir = os.path.join(data_dir, data_set_name + '/raw_data/data.stat')
+    multi_hot = True if data_set_name == 'cite' else False
+    level = 'easy'
+    n_topic = 20
+    stat_dir = os.path.join(data_dir, data_set_name + f'/raw_data/data_{level}_{n_topic}.stat')
     processed_dir = os.path.join(data_dir, data_set_name + '/processed/')
-    item_div_dir = os.path.join(processed_dir, 'diversity.item')
-    dcm_dir = os.path.join(data_dir, data_set_name + '/dcm.theta') # to store DCM's values -> the normalized num_of_cate for each user
+    item_div_dir = os.path.join(processed_dir, f'diversity_{level}_{n_topic}.item')
+    dcm_dir = os.path.join(data_dir, data_set_name + f'/dcm_{level}_{n_topic}.theta') # to store DCM's values
     item_fnum = 2
     user_fnum = 1
     # initial_rankers = 'svm'
@@ -284,26 +289,21 @@ if __name__ == '__main__':
     lr = 1e-3 # [1e-5, 1e-4, 1e-3, 1e-2]
     embedding_size = 16
     batch_size = 256 # [256, 512, 1024] # 500 by run_initial_ranker.py
-    hidden_size = 8 # [8, 16, 32, 64]
-    mu = 0.5 # rel-div-lambda, in DCM is called 'lmbd'
-    #mu = 1.0
+    hidden_size = 16 # [8, 16, 32, 64]
+    #mu = 0.5 # rel-div-lambda, in DCM is called 'lmbd'
+    mu = 1.0
     max_norm = None
+   
 
     user_remap_dict, item_remap_dict, cat_remap_dict, cid_dict, feature_size = pkl.load(open(stat_dir, 'rb')) # uid_remap_dict, iid_remap_dict, cid_remap_dict, cid_dict, feature_id
-    user_set = sorted(user_remap_dict.values())
-    item_set = sorted(item_remap_dict.values())
+    user_set = sorted(user_remap_dict.values()) # changed to .keys()
+    item_set = sorted(item_remap_dict.values()) # changed to .keys()
     num_user, num_item = len(user_remap_dict), len(item_remap_dict)
-    if data_set_name == 'ml-20m': # for ml-20m, num_cat should be decided based on cid_dict from the preprocessed data data.stat
-        num_clusters = len(cid_dict) # 20 for ml-20m
-    '''
-    print(len(user_remap_dict)) # [1, 284]
-    print(len(item_remap_dict)) # [1, 9939]
-    print(len(cat_remap_dict)) # [1, 20]
-    print(len(cid_dict)) # ⭐️# 20
-    print(feature_size) # 10244
-    '''
+    if data_set_name == 'cite': # for citeulike, num_cat should be decided based on cid_dict from the preprocessed data data.stat
+        num_clusters = len(cid_dict) # 50 for citeulike
+  
     # construct training files
-    train_dir = os.path.join(processed_dir,  initial_rankers + f'.data.train.{max_behavior_len}') # need to be processed by ``construct_list()`` using DIN.rankings.train.{max_behavior_len}, then saved in data.train.{max_behavior_len}
+    train_dir = os.path.join(processed_dir,  initial_rankers + f'.data.train.{max_behavior_len}.{level}.{n_topic}') # need to be processed by ``construct_list()`` using DIN.rankings.train.{max_behavior_len}, then saved in data.train.{max_behavior_len}
     if os.path.isfile(train_dir):
         train_lists = pkl.load(open(train_dir, 'rb'))
         #print(train_lists)
@@ -311,60 +311,70 @@ if __name__ == '__main__':
     else:
         print('construct lists for training set')
         # ⭐️ changed names
-        train_lists = construct_list(os.path.join(processed_dir, initial_rankers + f'.rankings.train.{max_behavior_len}'), max_time_len, num_clusters, True, multi_hot) #⭐️ added 'max_behavior_len' info 
+        train_lists = construct_list(os.path.join(processed_dir, initial_rankers + f'.rankings.train.{max_behavior_len}.{level}.{n_topic}'), max_time_len, num_clusters, True, multi_hot) #⭐️ added 'max_behavior_len' info 
         pkl.dump(train_lists, open(train_dir, 'wb'))
+        print('training set done')
 
     # construct test files
-    test_dir = os.path.join(processed_dir, initial_rankers + f'.data.test.{max_behavior_len}') # add {max_behavior_len} to distinguish with max_behavior_len==5
+    test_dir = os.path.join(processed_dir, initial_rankers + f'.data.test.{max_behavior_len}.{level}.{n_topic}') # add {max_behavior_len} to distinguish with max_behavior_len==5
     if os.path.isfile(test_dir):
         test_lists = pkl.load(open(test_dir, 'rb'))
         #print(test_lists)
 
     else:
         print('construct lists for test set')
-        test_lists = construct_list(os.path.join(processed_dir, initial_rankers + f'.rankings.test.{max_behavior_len}'), max_time_len, num_clusters, False, multi_hot) #⭐️ added 'max_behavior_len' info, num_clusters==num_cat
+        test_lists = construct_list(os.path.join(processed_dir, initial_rankers + f'.rankings.test.{max_behavior_len}.{level}.{n_topic}'), max_time_len, num_clusters, False, multi_hot) #⭐️ added 'max_behavior_len' info, num_clusters==num_cat
         pkl.dump(test_lists, open(test_dir, 'wb'))
+        print('test set done')
 
     click_model = DCM(max_time_len, num_clusters, user_set, item_set, item_div_dir, mu, dcm_dir) # construct click_model based on DCM, a global var.
    
-    feat, click, seq_len, user_behavior, items_div, uid, _ = train_lists
+    feat, click, seq_len, user_behavior, items_div, uid, _ = train_lists #!!! we dont have click info for citeulike !!!
     
-    click_model.train(train_lists) # nothing's changed on train_lists after training click models, DIN.rankings.train
-    #print(len(train_lists))
+    click_model.train(train_lists) # nothing's changed on train_lists after training click models
     # iterate param combinations
-    train(train_lists, test_lists, model_type, batch_size, feature_size, embedding_size, hidden_size, max_time_len,
-                            max_behavior_len, item_fnum, num_clusters, mu, max_norm, multi_hot)
-'''
-    for hidden_size in [64]:#[8, 16, 32, 64]:
-        for lr in [1e-2]:#[1e-5, 1e-4, 1e-3, 1e-2]:
-            #if hidden_size==32 and lr==1e-3:
-             #   ll = [512, 1024]
-            #else:
-             #   ll = [256, 512, 1024]
-            for batch_size in [256]:#[256, 512, 1024]:
+    #train(train_lists, test_lists, model_type, batch_size, feature_size, embedding_size, hidden_size, max_time_len,
+    #                        max_behavior_len, item_fnum, num_clusters, mu, max_norm, multi_hot, level)
+
+    for hidden_size in [16, 32, 64]: # [8, 16, 32, 64]
+        if hidden_size == 16:
+            lrlist = [1e-2]
+        else:
+            lrlist = [1e-5, 1e-4, 1e-3, 1e-2]
+        for lr in lrlist: # [1e-5, 1e-4, 1e-3, 1e-2]
+            if hidden_size==16 and lr==1e-4:
+                ll = [1024]
+            else:
+                ll = [256, 512, 1024]
+            for batch_size in ll: #[256, 512, 1024]: # [256, 512, 1024]
                 rep_res = []
-                train(train_lists, test_lists, model_type, batch_size, feature_size, embedding_size, hidden_size, max_time_len,
-                            max_behavior_len, item_fnum, num_clusters, mu, max_norm, multi_hot) #⭐️
-'''
-'''
+                #train(train_lists, test_lists, model_type, batch_size, feature_size, embedding_size, hidden_size, max_time_len,
+                #            max_behavior_len, item_fnum, num_clusters, mu, max_norm, multi_hot, level) #⭐️
+
+
                 rep_result1, rep_result2, rep_result3 = train(train_lists, test_lists, model_type, batch_size, feature_size, embedding_size, hidden_size, max_time_len,
-                            max_behavior_len, item_fnum, num_clusters, mu, max_norm, multi_hot) #⭐️
+                            max_behavior_len, item_fnum, num_clusters, mu, max_norm, multi_hot, level) #⭐️
+                
+                #rep_res.append([data_set_name, max_behavior_len, mu, hidden_size, lr, batch_size, max_time_len, model_type ,rep_result1])
                 #rep_res.append([data_set_name, max_behavior_len, mu, hidden_size, lr, batch_size, max_time_len, model_type ,rep_result2])
                 #rep_res.append([data_set_name, max_behavior_len, mu, hidden_size, lr, batch_size, max_time_len, model_type ,rep_result3])
                 
                 print(f"########################################## ---- h_s: {hidden_size}, lr: {lr}, b_s: {batch_size} is saved ########################################")
-                #with open('reproduction_logs_{}/{}_{}_{}_{}_{}_{}.pkl'.format(data_set_name, max_behavior_len, mu, hidden_size, lr, batch_size, max_time_len, model_type), 'wb') as f:
-                        #pkl.dump(rep_result, f)
+                #with open(f'citeulike_logs_{}/{}_{}_{}_{}_{}_{}.pkl'.format(data_set_name, max_behavior_len, mu, hidden_size, lr, batch_size, max_time_len, model_type), 'wb') as f:
+                #        pkl.dump(rep_result, f)
                 # Load existing data if the file exists
-                if os.path.exists("reproduction_logs_early_stop_5_1.pkl"):
-                    with open("reproduction_logs_early_stop_5_1.pkl", "rb") as f:
+                if os.path.exists(f"citeulike_logs_early_stop_{max_behavior_len}_{level}_{int(mu)}.pkl"):
+                    with open(f"citeulike_logs_early_stop_{max_behavior_len}_{level}_{int(mu)}.pkl", "rb") as f:
                         old_data = pickle.load(f)
                         rep_res.append(old_data)
                 rep_res.append([data_set_name, max_behavior_len, mu, hidden_size, lr, batch_size, max_time_len, model_type, rep_result1, rep_result2, rep_result3])
                 
                 # Save the updated list (overwriting with the new combined data)
-                with open("reproduction_logs_early_stop_5_1.pkl", "wb") as f:
+                with open(f"citeulike_logs_early_stop_{max_behavior_len}_{level}_{int(mu)}.pkl", "wb") as f:
                     pickle.dump(rep_res, f)
     #rep_res_df = pd.DataFrame(rep_res, columns=['dataset', 'max_beh_len', 'mu', 'hidden_size', 'lr', 'batch_size', 'max_time_len', 'model_type', 'rep_result'])
     #rep_res_df.to_pickle('rep_results.pkl')
-'''
+
+
+    #print('###################################')
+    #print(re_ranked)

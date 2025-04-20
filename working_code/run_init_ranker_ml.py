@@ -47,13 +47,13 @@ def save_rank(model, sess, data, reg_lambda, batch_size, out_file, item_div_dir,
     labels = []
     users = []
     items = []
-    # data: [uid, iid, user_behavior, label, seq_len]
+
     data_size = len(data[0])
     batch_num = data_size // batch_size
 
     for batch_no in range(batch_num):
         data_batch = get_aggregated_batch(data, batch_size=batch_size, batch_no=batch_no)
-        pred, label, loss = model.eval(sess, data_batch, reg_lambda) # from DIN ranker
+        pred, label, loss = model.eval(sess, data_batch, reg_lambda)
         preds.extend(pred)
         labels.extend(label)
         users.extend(data_batch[0]) # 2:cid, 3:rel
@@ -64,7 +64,7 @@ def save_rank(model, sess, data, reg_lambda, batch_size, out_file, item_div_dir,
 
 def train(train_file, val_file, test_file, eb_dim, feature_size,
           item_fnum, user_fnum, num_user, num_item, num_clusters, lr, reg_lambda, batch_size,
-          max_time_len, item_div_dir, user_history, max_behavior_len, processed_dir, pt_dir, multi_hot, level, n_topic):
+          max_time_len, item_div_dir, user_history, max_behavior_len, processed_dir, pt_dir, multi_hot):
     tf.reset_default_graph()
 
     if model_type == 'DIN':
@@ -139,9 +139,9 @@ def train(train_file, val_file, test_file, eb_dim, feature_size,
                         save_path = 'save_model_{}/{}/{}/ckpt'.format(data_set_name, max_time_len, model_name)
                         model.save(sess, save_path)
                         # create ranking list using vali_file and test_file
-                        save_rank(model, sess, val_file, reg_lambda, batch_size, processed_dir + model_type + '.rankings.train.' + str(max_behavior_len) + f'.{level}.{n_topic}',
-                                  item_div_dir, user_history, max_behavior_len, multi_hot) # user_history is user_profile_dict {uid: [iid, cate_multi_hot], [iid, cate_multi_hot],...}
-                        save_rank(model, sess, test_file, reg_lambda, batch_size, processed_dir + model_type + '.rankings.test.' + str(max_behavior_len) + f'.{level}.{n_topic}',
+                        save_rank(model, sess, val_file, reg_lambda, batch_size, processed_dir + model_type + '.rankings.train.' + str(max_behavior_len),
+                                  item_div_dir, user_history, max_behavior_len, multi_hot)
+                        save_rank(model, sess, test_file, reg_lambda, batch_size, processed_dir + model_type + '.rankings.test.' + str(max_behavior_len),
                                   item_div_dir, user_history, max_behavior_len, multi_hot)
                         print('initial lists saved')
 
@@ -267,23 +267,20 @@ if __name__ == '__main__':
     random.seed(1234)
     data_dir = 'data/'
     # data_set_name = 'ad'
-    #data_set_name = 'ml-20m'
-    data_set_name = 'cite'
-    multi_hot = True if data_set_name == 'cite' else False
-    level = 'hard'
-    n_topic = 20
-    stat_dir = os.path.join(data_dir, data_set_name + f'/raw_data/data_{level}_{n_topic}.stat')
+    data_set_name = 'ml-20m'
+    multi_hot = True if data_set_name == 'ml-20m' else False
+    stat_dir = os.path.join(data_dir, data_set_name + '/raw_data/data.stat')
     processed_dir = os.path.join(data_dir, data_set_name + '/processed/')
-    dcm_dir = os.path.join(data_dir, data_set_name + f'/dcm_{level}_{n_topic}.theta')
-    item_div_dir = os.path.join(processed_dir, f'diversity_{level}_{n_topic}.item') # for each uid a [normalized num_of_cate]
-    pt_dir = os.path.join(processed_dir, 'pretrain') # irrelevant
+    dcm_dir = os.path.join(data_dir, data_set_name + '/dcm.theta')
+    item_div_dir = os.path.join(processed_dir, 'diversity.item')
+    pt_dir = os.path.join(processed_dir, 'pretrain')
     model_type = 'DIN'
     # model_type = 'svm'
     # model_type = 'mart'
     item_fnum = 2
     user_fnum = 1
     max_time_len = 20
-    max_behavior_len = 10 #⭐️
+    max_behavior_len = 5 #⭐️
     #max_behavior_len = 5
     num_clusters = 5
     reg_lambda = 1e-4
@@ -294,34 +291,31 @@ if __name__ == '__main__':
     tree_num = 20
     tree_type = 'lgb'
     c = 2
-    
 
     user_remap_dict, item_remap_dict, cat_remap_dict, cate_dict, feature_size = pkl.load(open(stat_dir, 'rb'))
-    train_file, val_file, test_file, user_profile_dict, cat_dict = pkl.load(open(os.path.join(processed_dir, f'data_{level}_{n_topic}.data'), 'rb'))
+    train_file, val_file, test_file, user_profile_dict, cat_dict = pkl.load(open(os.path.join(processed_dir, 'data.data'), 'rb'))
     user_set = sorted(user_remap_dict.values())
     #print(len(user_set))
     #print(user_set)
     item_set = sorted(item_remap_dict.values())
     num_user, num_item, num_cate = len(user_remap_dict), len(item_remap_dict), len(cate_dict)
-    if data_set_name == 'cite':
+    if data_set_name == 'ml-20m':
         num_clusters = num_cate
 
     behavioral_train_file = construct_behavior_data(train_file, user_profile_dict, max_time_len, multi_hot)
     behavioral_val_file = construct_behavior_data(val_file, user_profile_dict, max_time_len, multi_hot)
     behavioral_test_file = construct_behavior_data(test_file, user_profile_dict, max_time_len, multi_hot)
-    #print(behavioral_train_file)
-    #print(behavioral_val_file)
-
     if model_type == 'DIN':
-        #test = train(behavioral_train_file, behavioral_val_file, behavioral_test_file, embedding_size, feature_size, \
-        #      item_fnum, user_fnum, num_user, num_item, num_clusters, lr, reg_lambda, batch_size, max_time_len, item_div_dir, \
-        #      user_profile_dict, max_behavior_len, processed_dir, pt_dir, multi_hot)
-        #print(test)
-
-        dcm_theta(user_profile_dict, item_div_dir, num_clusters, user_set, dcm_dir, multi_hot) # write dcm_theta for each uid {uid: normalized(num_cate)} to the file dcm.theta -> records the cate_sum for each user
+        '''
+        test = train(behavioral_train_file, behavioral_val_file, behavioral_test_file, embedding_size, feature_size, \
+              item_fnum, user_fnum, num_user, num_item, num_clusters, lr, reg_lambda, batch_size, max_time_len, item_div_dir, \
+              user_profile_dict, max_behavior_len, processed_dir, pt_dir, multi_hot)
+        print(test)
+        '''
+        dcm_theta(user_profile_dict, item_div_dir, num_clusters, user_set, dcm_dir, multi_hot)
         train(behavioral_train_file, behavioral_val_file, behavioral_test_file, embedding_size, feature_size, \
               item_fnum, user_fnum, num_user, num_item, num_clusters, lr, reg_lambda, batch_size, max_time_len, item_div_dir, \
-              user_profile_dict, max_behavior_len, processed_dir, pt_dir, multi_hot, level, n_topic)
+              user_profile_dict, max_behavior_len, processed_dir, pt_dir, multi_hot)
         
     elif model_type == 'mart':
         train_mart(behavioral_train_file, behavioral_val_file, behavioral_test_file, pt_dir, item_div_dir,

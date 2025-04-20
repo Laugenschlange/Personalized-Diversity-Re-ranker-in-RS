@@ -10,7 +10,86 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 from itertools import islice
+from collections import defaultdict
+from scipy.sparse import csr_matrix # compressed sparse row
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.metrics.pairwise import cosine_similarity
 
+
+
+
+def tag_topic_assign(tag_dir, item_tag_dir, item_tag_matrix_dir, item_topic_dir, level, n_topic):
+    # load item_tag_matrix and topic_df
+    if os.path.isfile(item_tag_matrix_dir):
+        item_tag_df = pd.read_pickle(item_tag_matrix_dir)
+        print('loaded item_tag_matrix.pkl')
+        #topic_df = pd.read_pickle("topic_df.pkl")
+    else:
+        df_tag = pd.read_csv(tag_dir, header=None, names=['tag_name']) 
+        tags_dict = df_tag.tag_name.to_dict()
+        with open(item_tag_dir, 'r') as f:
+            item_tag_data = [line.strip().split(' ') for line in f]
+        item_tag_data = [list(map(int, row[1:])) for row in item_tag_data] # ignore the first col, cuz it's the total num of tags of this item
+        item_tag_dict = {item_id: tag_ids for item_id, tag_ids in enumerate(item_tag_data)} # index starts from 0
+    
+        all_tags = sorted(set(tag_id for tags in item_tag_dict.values() for tag_id in tags)) # 46390 cates
+        # initialize matrix as a dict of dict
+        item_tag_matrix = defaultdict(lambda: {tag: 0 for tag in all_tags})
+    
+        # fill the matrix 
+        for item_id, tags in item_tag_dict.items():
+            if tags: # if tags is not empty
+                for tag in tags:
+                    item_tag_matrix[item_id][tag] = 1
+            else: # if the item has no tags, still assign it all 0 for each tag
+                for tag in all_tags:
+                    item_tag_matrix[item_id][tag] = 0
+        item_tag_df = pd.DataFrame.from_dict(item_tag_matrix, orient='index').fillna(0)
+        # rename cols to tag names
+        item_tag_df.columns = [tags_dict[tag_id] for tag_id in item_tag_df.columns]
+        # save df into .pickle format
+        item_tag_df.to_pickle("item_tag_matrix.pkl")
+        print("item_tag_matrix.pkl saved")
+
+    if os.path.isfile(item_topic_dir):
+        dat_format = pd.read_csv(item_topic_dir)
+        print(f'loaded item-topic_{level}_{n_topic}.dat')
+    else:
+        # compress the sparse matrix into less sparse one
+        compressed_matrix = csr_matrix(item_tag_df.values)
+        #### Apply LDA (NMF not applied, cuz it's mostly deterministic and less general, flexible)
+        # assumes each article is a mix of latent topics and each topic is a mix of tags
+        # unlike NMF, LDA is probabilistic (works with distributions rather than just factorizing)
+        n_topics=n_topic
+        lda_model = LatentDirichletAllocation(n_components=n_topics, random_state=42)
+        W_lda = lda_model.fit_transform(compressed_matrix) # item-topic-matrix
+        H_lda = lda_model.components_ # topic-tag-matrix
+    
+        article_topic_lda_df = pd.DataFrame(W_lda, index=item_tag_df.index, columns=[f"Topic {i+1}" for i in range(n_topics)])
+        article_topic_lda_df = article_topic_lda_df.sort_index() # resort values by index/item_id
+        topic_tag_lda_df = pd.DataFrame(H_lda, columns=item_tag_df.columns, index=[f"Topic {i+1}" for i in range(n_topics)])
+        article_topic_lda_df.to_pickle(f"data/cite/raw_data/item_topic_lda_{level}_{n_topic}.pkl")
+        topic_tag_lda_df.to_pickle(f"data/cite/raw_data/topic_tag_lda_{level}_{n_topic}.pkl")
+        print(f"item_topic_lda_{level}_{n_topic}.pkl and topic_tag_lda.pkl saved")
+    
+        # set prob threshold, filter certain topics for each item
+        prob_threshold = 0.1
+        # each item should have at least one topic that its probability is over threshold, otherwise there's something wrong with tag-topic-assignment
+        # add a check to ensure each item has at least one topic with its probability over threshold
+        def get_topics(x):
+            topics_above_threshold = [i for i, value in enumerate(x) if value > prob_threshold]
+            return topics_above_threshold if topics_above_threshold else None # if there's no assigned topic, return None
+        
+        top_topics_df = article_topic_lda_df.apply(get_topics, axis=1)
+        num_items_below_threshold = (article_topic_lda_df.max(axis=1) < prob_threshold).sum()
+        
+        dat_format = top_topics_df.apply(lambda x: ' '.join(map(str, x)) if x is not None else 'None')
+        #dat_format.columns = ['item_id', 'topics']
+        dat_format.to_csv(f'data/cite/raw_data/item-topic_{level}_{n_topic}.dat', sep=' ', index=False, header=False, quoting=csv.QUOTE_NONE, escapechar=' ')
+        print(f"File 'item-topic_{level}_{n_topic}.dat' saved.")
+        print("cate_dir is ready.")
+        
+    
 
 def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
     """
@@ -26,9 +105,9 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
     users.dat: (0-based indexing, user-item), rating matrix (collected articles)
     
     raw_dir: users.dat (user-item rating matrix), user's individual library
-    cate_dir: item-tag.dat
+    cate_dir: item-topic.dat
     stat_dir: an input file to save the statistics of the data
-    diver_dict: also an input file to save the embeddings of iid based on cates (to learn diversity?)
+    diver_dict: diversity.item, also an input file to save the embeddings of iid based on cates (to learn each item's cate_expression)
     """
     uid_remap_dict = {}
     iid_remap_dict = {}
@@ -44,18 +123,22 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
     cate_num = defaultdict(int)
     filter_cate_num = defaultdict(int)
     rating_num = defaultdict(int)
+    none_topic_num = 0
     pos, neg = 0, 0
 
     with open(cate_dir, 'r', encoding='utf-8') as r:
         '''
-        item-tag.dat
+        item-topic.dat (for citeulike, to reduce the dim of category)
         '''
         for iid, row in enumerate(r):
-            values = list(map(int, row.strip().split()))
-            cates = values[1:] # remove the first value (num of cates)
-            item_cate[iid] = cates
-            for cate in cates:
-                cate_num[cate] += 1 # cate-id-based indexing
+            if row.strip() != 'None': 
+                values = list(map(int, row.strip().split()))
+                cates = values[:] # remove the first value for item-tag.dat but not for item-topic.dat
+                item_cate[iid] = cates
+                for cate in cates:
+                    cate_num[cate] += 1 # cate-id-based indexing
+            else:
+                item_cate[iid] = None
 
     print('num of cate:', len(cate_num))
     for k, v in cate_num.items():
@@ -64,7 +147,7 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
 
     with open(raw_dir, 'r', encoding='utf-8') as r:
         '''
-        users' collected articles
+        users.dat: users' collected articles
         '''
         for uid, row in enumerate(r):
             values = list(map(int, row.strip().split()))
@@ -83,35 +166,24 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
     print('num of user:', len(user_item))
     print('num of item:', len(item_cate))
     '''
-    # stats = [0, 0, 0, 0]
-    # for uid in user_item.keys():
-    #     if len(user_item[uid]) > 150:
-    #         stats[0] += 1
-    #     elif len(user_item[uid]) > 100:
-    #         stats[1] += 1
-    #     elif len(user_item[uid]) > 50:
-    #         stats[2] += 1
-    #     else:
-    #         stats[3] += 1
-    # user_num = len(user_item.keys())
-    # print('item per user > 150: ', stats[0], stats[0] * 1.0 / user_num)
-    # print('100 < item per user < 150: ', stats[1], stats[1] * 1.0 / user_num)
-    # print('50 < item per user < 100: ', stats[2], stats[2] * 1.0 / user_num)
-    # print('item per user < 50: ', stats[3], stats[3] * 1.0 / user_num)
 
     # no need of further filtering, the data has already been processed with only users that with more than 10 references in the library left
     # just keep the part of creating uid_set, iid_set
-    #filter_pos, filter_neg = 0, 0
-    for uid in user_item.keys():
+    for uid in user_item.keys(): # only keep users that with more than 200 interactions
+        #if len(user_item[uid]) > 200: # means that the user has to have interacted with more than 200 items?
             uid_set.add(uid)
             for item in user_item[uid]:
                 iid_set.add(item) # add item_id, because iid_set if of 'set' format, even duplicated values are added, still only the unique remained
 
     for iid in iid_set: # iterate all iid in iid_set to get their cates
         cates = item_cate[iid] # a list of cate
-        for cate in cates:
-            filter_cate_num[cate] += 1 # organized according to cate, count their nums
-    
+        if cates: # if not None
+            for cate in cates:
+                filter_cate_num[cate] += 1 # organized according to cate, count their nums
+        else:
+            none_topic_num += 1
+    # filter out these items that with no topics:
+
     print('AFTER FILTER \nnum of cate:', len(filter_cate_num))
     for k, v in filter_cate_num.items():
         print('cate:', k, '  num:', v)
@@ -125,6 +197,7 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
 
     print('num user', len(uid_list))
     print('num item', len(iid_list))
+    print('num items that without any topic', none_topic_num)
     
 
     feature_id = 1 # starts from 1 to calculate the num of whole features in uid, iid and cid
@@ -147,16 +220,15 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
     iid_cate_map = {}
     for iid in iid_set:
         cates = item_cate[iid] # which cates can this iid have
-        # print(generate_cate_multi_hot(cates.split('|'), cid_dict))
         # iid_remap_dict has iid as keys, the index as values
         # by doint this, iid_cate_map and iid_remap_dict are cooresponding
         # create an iid_cate_map -> an embedding of iid in terms of cates
         iid_cate_map[iid_remap_dict[iid]] = generate_cate_multi_hot(cates, cid_dict)
 
-    with open(stat_dir, 'wb') as f:
+    with open(stat_dir, 'wb') as f: # what is stat_dir? A pre-created file? -- seems so
         # serialize the info as a byte stream and save them in f
         # save the list of uid, iid and cid and cid_dict (dont see the diff.) and total feature num
-        pkl.dump([uid_remap_dict, iid_remap_dict, cid_remap_dict, cid_dict, feature_id], f)
+        pkl.dump([uid_remap_dict, iid_remap_dict, cid_remap_dict, cid_dict, feature_id], f) # cid_dict: {cid: idx}
     with open(diver_dict, 'wb') as f:
         # to save embedding of iid based on cate
         pkl.dump(iid_cate_map, f) # [feature_id] = item_matrix_based_on_cid_dict -> represents topic coverage of each item / topic distribution
@@ -166,34 +238,70 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
 
 def generate_cate_multi_hot(cates, cate_dict):
     multi_hot = np.zeros(len(cate_dict)) # first create the right size of zero-matrix
-    for i in cates:
-        # here shows the meaning of separately creating a cid_dict
-        # just to match the index between multi_hot and cate_dict 
-        # with cate as key/indicator 
-        # which cates this iid has, assign 1 to this position in multi_hot
-        multi_hot[cate_dict[i]] = 1
+    if cates:
+        for i in cates:
+            # here shows the meaning of separately creating a cid_dict
+            # just to match the index between multi_hot and cate_dict 
+            # with cate as key/indicator 
+            # which cates this iid has, assign 1 to this position in multi_hot
+            multi_hot[cate_dict[i]] = 1
+
     return multi_hot
 
 
-def split_data(in_file, statistics, diver_dir, out_file):
+def split_data(in_file, statistics, diver_dir, out_file, level):
     '''
     split data for training, validation and test
     in_file: users.dat
     spliting_ratio: 2:3:4:1 (user_profile_data:trainig:validation:test)
+    out_file: data.data.{level}
     '''
-    user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, _ = pkl.load(open(statistics, 'rb'))
-    user_set = set(user_remap_dict.keys())
+    user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, _ = pkl.load(open(statistics, 'rb')) # user_remap_dict: {uid: fea_id}, cat_remap_dict: {cid: fea_id}, cid_list: {cid: idx}
+    iid_cate_map = pkl.load(open(diver_dir, 'rb'))
+    user_set = set(user_remap_dict.keys()) # uids
     records = []
     with open(raw_dir, 'r', encoding='utf-8') as r:
         '''
         users' collected articles
         '''
+        embeddings = np.array([iid_cate_map[fea_id] for iid, fea_id in item_remap_dict.items()])
+        simi_matrix = cosine_similarity(embeddings)
+        top_simi_iid = {} # for saving each iid's top-s iids
+
+        # get similarity scores for each item pair
+        for iid in item_remap_dict.keys(): # iid
+            sim_scores = list(enumerate(simi_matrix[iid]))
+            filtered_scores = [
+                (other_iid, score) for other_iid, score in sim_scores
+                if other_iid != iid #all_iid[other_idx] not in collected_art and 
+            ] # except itm itself
+            if level=='hard': # hard takes the top 5 similar articles as negative
+                top_s = sorted(filtered_scores, key=lambda x: x[1], reverse=True)[:5] # for each iid select the most similar 5 iids as negative
+            if level=='easy': # easy takes the top 5 dissimilart articles as negative
+                top_s = sorted(filtered_scores, key=lambda x: x[1], reverse=False)[:5] # for each iid select the most dissimilar 5 iids as negative
+            top_s_iid = [(i, score) for i, score in top_s]
+            top_simi_iid[iid] = top_s_iid
+            
         for uid, row in enumerate(r):
             values = list(map(int, row.strip().split()))
-            collected_art = values[1:] # each user's collected articles
-            if uid in user_set:
-                records.append([uid, collected_art]) # records only contain uid + items, no ratings
-
+            collected_art = values[1:] # each user's collected article ids
+            
+            all_recs = set()
+            for art in collected_art:
+                ##### compute each article-pari's similarity in terms of cates based on: 1. Jaccard similarity 2. Cosine similarity
+                # add positive info
+                if uid in user_set:
+                    records.append([uid, art, 1]) # manually add rating=1 as positive info
+                
+                # add negative info
+                for itm, _ in top_simi_iid[art]:
+                    all_recs.add(itm)
+            final_recs = all_recs - set(collected_art)
+            for art_neg in final_recs:
+                if uid in user_set:
+                    records.append([uid, art_neg, 0]) # manually add rating=0 as negative info
+        
+    # shuffle 
     rec_num = len(records)
     random.shuffle(records)
     user_profile_data, train_data, val_data, test_data = records[:int(rec_num*0.2)], \
@@ -203,42 +311,33 @@ def split_data(in_file, statistics, diver_dir, out_file):
 
     user_profile_dict, train_dict, val_dict, test_dict = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
     train_set, val_set, test_set = [], [], []
-    for user, items in user_profile_data: # from records [uid, collected_art(iids)]
-        #if rel: # if pos (~ that user likes this recommendation) -> as user behavior data to learn
-            uid = user_remap_dict[user] # uid_remap_dict, uses uid as index, feature_id as value -> uid is actually feature_id 
-            for item in items:
-                iid = item_remap_dict[item] # ⭐️ item is actually the true iid, iid is just the feature_id of this iid?
-                cid = cat_dict[iid] # iid is the feature_id, cid is the rep matrix of this iid w.r.t cate
-                ft = [iid] # feature
-                ft.extend(cid)
-                user_profile_dict[uid].append(ft) # based on user, records a list of [feature_id of iid, rep. matrix of iid]
+    for user, item, rel in user_profile_data:
+        if rel: # if pos (~ that user likes this recommendation) -> as user behavior data to learn
+            uid, iid = user_remap_dict[user], item_remap_dict[item]
+            cid = cat_dict[iid] # the multi_hot encoding for mutli_hot==True
+            ft = [iid]
+            ft.extend(cid)
+            user_profile_dict[uid].append(ft) # based on user, records iid, cid
 
-    for user, items in train_data:
-        uid = user_remap_dict[user]
-        for item in items:
-            iid = item_remap_dict[item]
-            cid = cat_dict[iid]
-            train_set.append([uid, iid, cid])
-            train_dict[uid].append(iid)
+    for user, item, rel in train_data:
+        uid, iid = user_remap_dict[user], item_remap_dict[item]
+        cid = cat_dict[iid]
+        train_set.append([uid, iid, cid, rel])
+        train_dict[uid].append(iid)
 
-    for user, items in test_data:
-        uid = user_remap_dict[user]
-        for item in items:
-            iid = item_remap_dict[item]
-            cid = cat_dict[iid]
-            test_set.append([uid, iid, cid])
-            test_dict[uid].append(iid)
+    for user, item, rel in test_data:
+        uid, iid = user_remap_dict[user], item_remap_dict[item]
+        cid = cat_dict[iid]
+        test_set.append([uid, iid, cid, rel])
+        test_dict[uid].append(iid)
 
-    for user, items in val_data:
-        uid = user_remap_dict[user]
-        for item in items:
-            iid = item_remap_dict[item]
-            cid = cat_dict[iid]
-            val_set.append([uid, iid, cid])
-            val_dict[uid].append(iid)
+    for user, item, rel in val_data:
+        uid, iid = user_remap_dict[user], item_remap_dict[item]
+        cid = cat_dict[iid]
+        val_set.append([uid, iid, cid, rel])
+        val_dict[uid].append(iid)
 
-    # print('train data', train_set[100])
-    # print('user behavior', user_profile_dict[100])
+  
     with open(out_file, 'wb') as f:
         pkl.dump([train_set, val_set, test_set, user_profile_dict, cat_dict], f)
     print(' =============data split done=============')
@@ -247,15 +346,27 @@ def split_data(in_file, statistics, diver_dir, out_file):
 if __name__ == '__main__':
     # parameters
     random.seed(1234)
+    # start_date = date(2017, 11, 25)
+    # end_date = date(2017, 12, 3)
     data_dir = 'data/'
     data_set_name = 'cite'
-    num_clusters = 5
+    #num_clusters = 5
+    level = 'hard'
+    n_topic = 20
     raw_dir = os.path.join(data_dir, data_set_name + '/raw_data/users.dat')
-    cate_dir = os.path.join(data_dir, data_set_name + '/raw_data/item-tag.dat')
-    stat_dir = os.path.join(data_dir, data_set_name + '/raw_data/data.stat')
+    tag_dir = os.path.join(data_dir, data_set_name + '/raw_data/tags.dat')
+    item_tag_dir = os.path.join(data_dir, data_set_name + '/raw_data/item-tag.dat') # ⭐️ use item-topic.dat instead 
+    item_tag_matrix_dir = os.path.join(data_dir, data_set_name + '/raw_data/item_tag_matrix.pkl')
+    article_topic_lda_dir = os.path.join(data_dir, data_set_name + f"/raw_data/item_topic_lda_{level}_{n_topic}.pkl")
+    topic_tag_lda_dir = os.path.join(data_dir, data_set_name + f"/raw_data/topic_tag_lda_{level}_{n_topic}.pkl")
+    cate_dir = os.path.join(data_dir, data_set_name + f'/raw_data/item-topic_{level}_{n_topic}.dat')
+    stat_dir = os.path.join(data_dir, data_set_name + f'/raw_data/data_{level}_{n_topic}.stat')
     processed_dir = os.path.join(data_dir, data_set_name + '/processed/')
-    diver_dir = os.path.join(processed_dir, 'diversity.item') # to learn diversity
+    diver_dir = os.path.join(processed_dir, f'diversity_{level}_{n_topic}.item') # to get each item's cate distribution
 
+
+    tag_topic_assign(tag_dir, item_tag_dir, item_tag_matrix_dir, cate_dir, level, n_topic)
+    
     if not os.path.exists(processed_dir):
         os.makedirs(processed_dir)
 
@@ -266,15 +377,11 @@ if __name__ == '__main__':
         user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, feature_size = stat_data(raw_dir, cate_dir,
                                                                                              stat_dir, diver_dir)
         #stat_data(raw_dir, cate_dir, stat_dir, diver_dir)
-    # user_set = sorted(user_remap_dict.values())
-    # item_set = sorted(item_remap_dict.values())
-    # num_user, num_item, num_cat = len(user_remap_dict), len(item_remap_dict), len(cat_remap_dict)
-    #print(f'cid_dict: {cid_list}')
-    processed_data_dir = os.path.join(processed_dir, 'data.data')
+     processed_data_dir = os.path.join(processed_dir, f'data_{level}_{n_topic}.data') # ⭐️⭐️⭐️⭐️⭐️⭐️⭐️ need to add level param too 
     
     if os.path.isfile(processed_data_dir):
-        train_file, val_file, test_file, user_profile_dict, cat_dict = pkl.load(open(processed_dir + '/data.data', 'rb'))
+        train_file, val_file, test_file, user_profile_dict, cat_dict = pkl.load(open(processed_dir + f'/data_{level}_{n_topic}.data', 'rb'))
         print('loaded data for initial rankers')
     else:
-        train_file, val_file, test_file, user_profile_dict, cat_dict = split_data(raw_dir, stat_dir, diver_dir, processed_data_dir)
+        train_file, val_file, test_file, user_profile_dict, cat_dict = split_data(raw_dir, stat_dir, diver_dir, processed_data_dir, level)
 

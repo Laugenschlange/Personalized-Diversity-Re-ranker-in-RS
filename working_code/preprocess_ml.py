@@ -28,7 +28,7 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
     raw_dir: ratings.csv (userId, movieId, rating, timestamp)
     cate_dir: movies.csv (movieId, title, genres)
     stat_dir: an input file to save the statistics of the data
-    diver_dict: also an input file to save the embeddings of iid based on cates (to learn diversity?)
+    diver_dict: also an input file to save the embeddings of iid based on cates (diversity.item)
     """
     uid_remap_dict = {}
     iid_remap_dict = {}
@@ -80,26 +80,11 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
         print('rating:', k, ' num:', v, ' percent:', v * 1.0 / (pos + neg))
     print('num of user:', len(user_item))
     print('num of item:', len(item_cate))
-    # stats = [0, 0, 0, 0]
-    # for uid in user_item.keys():
-    #     if len(user_item[uid]) > 150:
-    #         stats[0] += 1
-    #     elif len(user_item[uid]) > 100:
-    #         stats[1] += 1
-    #     elif len(user_item[uid]) > 50:
-    #         stats[2] += 1
-    #     else:
-    #         stats[3] += 1
-    # user_num = len(user_item.keys())
-    # print('item per user > 150: ', stats[0], stats[0] * 1.0 / user_num)
-    # print('100 < item per user < 150: ', stats[1], stats[1] * 1.0 / user_num)
-    # print('50 < item per user < 100: ', stats[2], stats[2] * 1.0 / user_num)
-    # print('item per user < 50: ', stats[3], stats[3] * 1.0 / user_num)
 
     # filter out users who interact with less than 50 items (or 200?)
     filter_pos, filter_neg = 0, 0
     for uid in user_item.keys():
-        if len(user_item[uid]) > 200: # should the user have to have interacted with more than 200 items?
+        if len(user_item[uid]) > 200: # means that the user has to have interacted with more than 200 items?
             uid_set.add(uid)
             for item in user_item[uid]:
                 iid_set.add(item[0]) # add item_id
@@ -149,13 +134,12 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
     iid_cate_map = {}
     for iid in iid_set:
         cates = item_cate[iid] # which cates can this iid have
-        # print(generate_cate_multi_hot(cates.split('|'), cid_dict))
         # iid_remap_dict has iid as keys, the index as values
         # by doint this, iid_cate_map and iid_remap_dict are cooresponding
         # create an iid_cate_map -> an embedding of iid in terms of cates
         iid_cate_map[iid_remap_dict[iid]] = generate_cate_multi_hot(cates.split('|'), cid_dict)
 
-    with open(stat_dir, 'wb') as f: # stat_dir is a pre-created file
+    with open(stat_dir, 'wb') as f: # what is stat_dir? A pre-created file? -- seems so
         # serialize the info as a byte stream and save them in f
         # save the list of uid, iid and cid and cid_dict (dont see the diff.) and total feature num
         pkl.dump([uid_remap_dict, iid_remap_dict, cid_remap_dict, cid_dict, feature_id], f)
@@ -166,7 +150,7 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
     return uid_remap_dict, iid_remap_dict, cid_remap_dict, cid_dict, feature_id
 
 
-def generate_cate_multi_hot(cates, cate_dict):
+def generate_cate_multi_hot(cates, cate_dict): # for MovieLens-20M
     multi_hot = np.zeros(len(cate_dict)) # first create the right size of zero-matrix
     for i in cates:
         # here shows the meaning of separately creating a cid_dict
@@ -182,8 +166,9 @@ def split_data(in_file, statistics, diver_dir, out_file):
     split data for training, validation and test
     in_file: (csv) ratings.csv
     spliting_ratio: 2:3:4:1 (user_profile_data:trainig:validation:test)
+    out_file: data.data
     '''
-    user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, _ = pkl.load(open(statistics, 'rb'))
+    user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, _ = pkl.load(open(statistics, 'rb')) # [user, iid, cid,
     user_set = set(user_remap_dict.keys())
     records = []
     with open(in_file, 'r', encoding='utf-8') as r:
@@ -192,11 +177,11 @@ def split_data(in_file, statistics, diver_dir, out_file):
         for row in csv_reader:
             usr, itm, rating, ts = row
             if usr in user_set: # record relevant users' info
-                rel = 1 if float(rating) > 4 else 0
+                rel = 1 if float(rating) > 4 else 0 # mark records with ratings > 4 as positive, otherwise negative -> in the end als 'label'
                 records.append([usr, itm, rel])
 
     rec_num = len(records)
-    random.shuffle(records)
+    random.shuffle(records) # no time order
     user_profile_data, train_data, val_data, test_data = records[:int(rec_num*0.2)], \
       records[int(rec_num*0.2):int(rec_num*0.5)], records[int(rec_num*0.5):int(rec_num*0.9)], records[int(rec_num*0.9):]
 
@@ -207,7 +192,7 @@ def split_data(in_file, statistics, diver_dir, out_file):
     for user, item, rel in user_profile_data:
         if rel: # if pos (~ that user likes this recommendation) -> as user behavior data to learn
             uid, iid = user_remap_dict[user], item_remap_dict[item]
-            cid = cat_dict[iid] 
+            cid = cat_dict[iid] # the multi_hot encoding for mutli_hot==True
             ft = [iid]
             ft.extend(cid)
             user_profile_dict[uid].append(ft) # based on user, records iid, cid
@@ -233,7 +218,7 @@ def split_data(in_file, statistics, diver_dir, out_file):
     # print('train data', train_set[100])
     # print('user behavior', user_profile_dict[100])
     with open(out_file, 'wb') as f:
-        pkl.dump([train_set, val_set, test_set, user_profile_dict, cat_dict], f)
+        pkl.dump([train_set, val_set, test_set, user_profile_dict, cat_dict], f) # [uid, iid, cid, rel], {uid: [iid, cate_multi]} -> user_profile_dict only contains positive info
     print(' =============data split done=============')
     return train_set, val_set, test_set, user_profile_dict, cat_dict
 
@@ -241,6 +226,8 @@ def split_data(in_file, statistics, diver_dir, out_file):
 if __name__ == '__main__':
     # parameters
     random.seed(1234)
+    # start_date = date(2017, 11, 25)
+    # end_date = date(2017, 12, 3)
     data_dir = 'data/'
     data_set_name = 'ml-20m'
     num_clusters = 5
@@ -248,21 +235,18 @@ if __name__ == '__main__':
     cate_dir = os.path.join(data_dir, data_set_name + '/raw_data/movies.csv')
     stat_dir = os.path.join(data_dir, data_set_name + '/raw_data/data.stat')
     processed_dir = os.path.join(data_dir, data_set_name + '/processed/')
-    diver_dir = os.path.join(processed_dir, 'diversity.item') # to learn diversity
+    diver_dir = os.path.join(processed_dir, 'diversity.item') # to learn diversity?
 
     if not os.path.exists(processed_dir):
         os.makedirs(processed_dir)
 
     if os.path.isfile(stat_dir):
-        user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, feature_size = pkl.load(open(stat_dir, 'rb'))
+        user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, feature_size = pkl.load(open(stat_dir, 'rb')) # uid_remap_dict, iid_remap_dict, cid_remap_dict, cid_dict, feature_id
         print('loaded stat file')
     else:
         user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, feature_size = stat_data(raw_dir, cate_dir,
                                                                                              stat_dir, diver_dir)
 
-    # user_set = sorted(user_remap_dict.values())
-    # item_set = sorted(item_remap_dict.values())
-    # num_user, num_item, num_cat = len(user_remap_dict), len(item_remap_dict), len(cat_remap_dict)
 
     processed_data_dir = os.path.join(processed_dir, 'data.data')
     if os.path.isfile(processed_data_dir):
