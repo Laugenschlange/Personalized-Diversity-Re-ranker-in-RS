@@ -23,7 +23,7 @@ def eval(model, sess, data, reg_lambda, batch_size):
     labels = []
     losses = []
 
-    data_size = len(data[0]) # which format is data? csv or df?
+    data_size = len(data[0]) 
     batch_num = data_size // batch_size
     print('eval', batch_size, batch_num)
     t = time.time()
@@ -186,7 +186,6 @@ def get_data(dataset, embed_dir, multi_hot=False):
             record_i = [click_i, uid_i] + itm_emd.tolist() + cat_emd.tolist() + feat_i
             records.append(record_i)
     records = np.array(sorted(records, key=lambda k: k[1]))
-    # print(len(target_item[0]))
     return records[:, :-len(target_item[0])], records[:, -len(target_item[0]):].tolist()
 
 
