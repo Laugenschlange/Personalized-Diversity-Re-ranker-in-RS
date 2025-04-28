@@ -269,13 +269,45 @@ def rerank(attracts, terms):
     val = np.array(attracts) * np.array(np.ones_like(terms)) # multiplies preds * 1-array
     return sorted(range(len(val)), key=lambda k: val[k], reverse=True)
 
+# define recall@k and map@k
+def recall_at_k(preds, labels, k, threshold):
+    binary_labels = [1 if rel >= threshold else 0 for rel in labels]
+    top_k_indices = sorted(range(len(preds)), key=lambda i: preds[i], reverse=True)[:k]
+    hits = sum([labels[i] for i in top_k_indices])
+    # total number of relevant items
+    total_relevant = sum(labels)
+    if total_relevant == 0: # avoid divided by zero
+        return 0.0  
+    
+    return hits / total_relevant
 
-def evaluate(labels, preds, terms, users, items, click_model, items_div, scope_number, is_rerank): # len(users)==768 768 * [20], each row is a 20-long(20 uid) seq, and each unique seq will repeat 4 times???
+def average_precision_at_k(preds, labels, k, threshold):
+    binary_labels = [1 if rel >= threshold else 0 for rel in labels]
+    sorted_indices = sorted(range(len(preds)), key=lambda i: preds[i], reverse=True)[:k]
+    
+    hits = 0
+    score = 0.0
+    for i, idx in enumerate(sorted_indices):
+        if binary_labels[idx] == 1:
+            hits += 1
+            score += hits / (i + 1)  # precision at this position
+
+    # Normalize by the number of relevant items (max k to avoid overcounting)
+    total_relevant = sum(binary_labels)
+    if total_relevant == 0:
+        return 0.0
+    
+    return score / min(total_relevant, k)
+
+
+
+
+def evaluate(labels, preds, terms, users, items, click_model, items_div, scope_number, is_rerank): # len(users)==768 768 * [20], each row is a 20-long(20 uid) seq, and each unique seq will repeat 4 times
     '''
     scope_number: (int) 5/10 (might be ndcg@k's this 'k', top-k)
     items: features from train/test_file (e.g. [2122,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,1,0,0,0,0] -> item_id + num_cat
     '''
-    ndcg, utility, ils, diversity, satisfaction, mrr = [], [], [], [], [], []
+    ndcg, utility, ils, diversity, satisfaction, mrr, recall, MAP = [], [], [], [], [], [], [], []
     for label, pred, term, uid, init_list, item_div in zip(labels, preds, terms, users, items, items_div): # len(uid)==20 [6, 1, 6, 2, 0, 0, 4, 2, 1, 2, 0, 1, 2, 0, 1, 0, 1, 0, 0, 0] 
         # each tuple contains one ele from each of the original seq in zip(), if the seq in zip() are of unequal lengths, zip stops after the shortest seq ends
         # each var. only contains the corresponding seq's ele
@@ -291,11 +323,11 @@ def evaluate(labels, preds, terms, users, items, click_model, items_div, scope_n
             final = rerank(pred, term)
             final_list = init_list[final]
         else:
-            final = list(range(len(pred))) # evaluate initial rankers
+            final = list(range(len(pred))) # return index
             final_list = init_list[final]
         #return init_list, item_div, pred, term, final, final_list #⭐️
 
-        click = np.array(label)[final].tolist() # reranked labels
+        click = np.array(label)[final].tolist() # reranked labels, labels come from DCM -> probabilistic
         gold = sorted(range(len(click)), key=lambda k: click[k], reverse=True) # optimal list for ndcg
         item_div_final = item_div[final]
 
@@ -312,15 +344,19 @@ def evaluate(labels, preds, terms, users, items, click_model, items_div, scope_n
 
         #return uid, users #⭐️ uid: [20], users: [768, 20] 768/4=192 unique uid
 
-        new_click = click_model.generate_click_prob(uid, final_list, scope_number) # ⚡️error! uid should be a single int, yeah, should take data_batch[-2] in run_test.py's eval() as input which is exactly uid but not the index -1
+        new_click = click_model.generate_click_prob(uid, final_list, scope_number) # ⚡️uid should be a single int, yeah, should take data_batch[-2] in run_test.py's eval() as input which is exactly uid but not the index -1
         rr = 1. / (np.argmax(np.array(new_click)) + 1)
+        rec = recall_at_k(pred, new_click, scope_number, 0.5)
+        Map = average_precision_at_k(pred, new_click, scope_number, 0.5)
 
         ndcg.append(_ndcg)
-        utility.append(sum(new_click)) # the sum of click_prob of all items?
+        utility.append(sum(new_click)) # the sum of click_prob of all items
         mrr.append(rr)
         ils.append(np.sum(euclidean_distances(scope_div, scope_div)) / (scope_number * (scope_number - 1) / 2))
         diversity.append(np.sum(1 - np.prod(1 - scope_div, axis=0)))
         satisfaction.append(click_model.generate_satisfaction(uid, final_list, scope_number))
+        recall.append(rec)
+        MAP.append(Map)
     return np.mean(np.array(ndcg)), np.mean(np.array(utility)), np.mean(np.array(ils)), np.mean(
         np.array(diversity)), np.mean(np.array(satisfaction)), np.mean(np.array(mrr)), \
-        [ndcg, utility, diversity, satisfaction, mrr]
+        np.mean(np.array(recall)), np.mean(np.array(MAP)), [ndcg, utility, diversity, satisfaction, mrr]
