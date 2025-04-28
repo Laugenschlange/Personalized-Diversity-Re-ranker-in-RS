@@ -225,7 +225,7 @@ def stat_data(raw_dir, cate_dir, stat_dir, diver_dict):
         # create an iid_cate_map -> an embedding of iid in terms of cates
         iid_cate_map[iid_remap_dict[iid]] = generate_cate_multi_hot(cates, cid_dict)
 
-    with open(stat_dir, 'wb') as f: # what is stat_dir? A pre-created file? -- seems so
+    with open(stat_dir, 'wb') as f: # statistics
         # serialize the info as a byte stream and save them in f
         # save the list of uid, iid and cid and cid_dict (dont see the diff.) and total feature num
         pkl.dump([uid_remap_dict, iid_remap_dict, cid_remap_dict, cid_dict, feature_id], f) # cid_dict: {cid: idx}
@@ -377,7 +377,7 @@ if __name__ == '__main__':
         user_remap_dict, item_remap_dict, cat_remap_dict, cid_list, feature_size = stat_data(raw_dir, cate_dir,
                                                                                              stat_dir, diver_dir)
         #stat_data(raw_dir, cate_dir, stat_dir, diver_dir)
-     processed_data_dir = os.path.join(processed_dir, f'data_{level}_{n_topic}.data') # ⭐️⭐️⭐️⭐️⭐️⭐️⭐️ need to add level param too 
+     processed_data_dir = os.path.join(processed_dir, f'data_{level}_{n_topic}.data') # need to add level param too 
     
     if os.path.isfile(processed_data_dir):
         train_file, val_file, test_file, user_profile_dict, cat_dict = pkl.load(open(processed_dir + f'/data_{level}_{n_topic}.data', 'rb'))
