@@ -47,7 +47,7 @@ def eval(model, sess, data_file, max_time_len, max_seq_len, reg_lambda, batch_si
     #    return None, None, None
     t = time.time()
     for batch_no in range(batch_num): # 3 times, batch_no.1/2/3, generates sess for RAPID model's re-ranking
-        data_batch = get_aggregated_batch(data, batch_size=batch_size, batch_no=batch_no) # data_batch: 7 * 256 * 20 * 21 ??? ⚡️what's the result mean? -> means batch_num==7, len(data)==256, len(data[0])==20, len(data[0][0])==21
+        data_batch = get_aggregated_batch(data, batch_size=batch_size, batch_no=batch_no) # data_batch: 7 * 256 * 20 * 21 -> means batch_num==7, len(data)==256, len(data[0])==20, len(data[0][0])==21
         # data_batch already has repeated records 4 times for each uid, the input 'data' must already have been repeated 4 times 
         # data_batch: [items, x, x, x, items_div, x, x, users]
         #seq_rel_inp, rel, div, pred, term, label, loss = model.eval(sess, data_batch, reg_lambda, no_print=batch_no) # pred, term, label are included in data_batch⭐️ test div_gain, lstm_rel
@@ -91,7 +91,6 @@ def eval(model, sess, data_file, max_time_len, max_seq_len, reg_lambda, batch_si
 
     loss = sum(losses) / len(losses)
     #initlist = evaluate(labels, preds, terms, users, items, click_model, items_div, 5, isrank) # metrics@5 #⭐️
-    #return initlist #⭐️
     res_low = evaluate(labels, preds, terms, users, items, click_model, items_div, 5, isrank) # metrics@5 #⭐️
     #uid, users_eva = evaluate(labels, preds, terms, users, items, click_model, items_div, 10, isrank) # metrics@5 #⭐️
     res_high = evaluate(labels, preds, terms, users, items, click_model, items_div, 10, isrank) # metrics@10 #⭐️
