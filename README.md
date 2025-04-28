@@ -6,10 +6,10 @@ this is the repo for saving the codes of the thesis 'Adapting Personalized Diver
    * sklearn 
 
 ### Dataset
-   * citeulike: https://github.com/js05212/citeulike-a
+   * citeulike-a: https://github.com/js05212/citeulike-a
    * MovieLens-20M: https://files.grouplens.org/datasets/movielens/ml-20m-README.html 
 
-### Run
+### Use
    * reproduce result of RAPID on MovieLens-20M:
       * ```python
         python working_code/preprocess_ml.py
