@@ -1,5 +1,5 @@
 # Personalized-Diversity-Re-ranker-in-RS
-this is the repo for saving the codes of the thesis 'Adapting Personalized Diversity from Commercial to Research Paper Recommendations'
+this is the repo for saving the codes of the thesis '**Adapting Personalized Diversity from Commercial to Research Paper Recommendations**'
 ### Dependencies:
    * Tensorflow 1.x
    * numpy
